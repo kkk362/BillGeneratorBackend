@@ -799,3 +799,5 @@ app.get("/users", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+module.exports = app;
