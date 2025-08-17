@@ -36,11 +36,13 @@ const swaggerOptions = {
       description: "API for Bill Generator application connected to Neon PostgreSQL"
     },
     servers: [
+      { url: "https://bill-generator-backend-sooty.vercel.app" },
       { url: `http://localhost:${process.env.PORT || 3000}` }
     ]
   },
   apis: ["./index.js"],
 };
+
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
