@@ -4,28 +4,21 @@ const { Pool } = require("pg");
 const swaggerUi = require("swagger-ui-express");
 const swaggerJsdoc = require("swagger-jsdoc");
 const cors = require("cors");
-
-
 const app = express();
-
 const corsOptions = {
-  origin: ["exp://10.158.61.81:8081", "http://localhost:8081"], // Add your Expo app URL and local dev URL
+  origin: ["exp://10.158.61.81:8081", "http://localhost:8081", "https://bill-generator-backend-sooty.vercel.app"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 app.use(cors(corsOptions));
-
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 // Database connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
-
 // Swagger options
 const swaggerOptions = {
   definition: {
@@ -42,11 +35,15 @@ const swaggerOptions = {
   },
   apis: ["./index.js"],
 };
-
-
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
-
+// Use CDN for Swagger UI assets
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs, {
+  customCssUrl: "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+  customJs: [
+    "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+    "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"
+  ]
+}));
 // Helper function for pagination
 const getPaginationParams = (req) => {
   const page = parseInt(req.query.page) || 1;
@@ -54,7 +51,6 @@ const getPaginationParams = (req) => {
   const offset = (page - 1) * limit;
   return { page, limit, offset };
 };
-
 /**
  * @swagger
  * components:
@@ -77,7 +73,6 @@ const getPaginationParams = (req) => {
  *         category:
  *           type: string
  */
-
 /**
  * @swagger
  * /api/products:
@@ -104,25 +99,20 @@ app.get("/api/products", async (req, res) => {
   try {
     const { page, limit, offset } = getPaginationParams(req);
     const search = req.query.search || '';
-    
     let query = "SELECT * FROM products";
     let countQuery = "SELECT COUNT(*) FROM products";
     let queryParams = [];
-    
     if (search) {
       query += " WHERE name ILIKE $1 OR sku ILIKE $1";
       countQuery += " WHERE name ILIKE $1 OR sku ILIKE $1";
       queryParams.push(`%${search}%`);
     }
-    
     query += ` ORDER BY created_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
     queryParams.push(limit, offset);
-    
     const [products, totalResult] = await Promise.all([
       pool.query(query, queryParams),
       pool.query(countQuery, search ? [`%${search}%`] : [])
     ]);
-    
     res.json({
       items: products.rows,
       total: parseInt(totalResult.rows[0].count),
@@ -134,7 +124,6 @@ app.get("/api/products", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/products/{id}:
@@ -154,18 +143,15 @@ app.get("/api/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query("SELECT * FROM products WHERE id = $1", [id]);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Product not found" });
     }
-    
     res.json({ product: result.rows[0] });
   } catch (err) {
     console.error("Error fetching product:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/products:
@@ -201,28 +187,24 @@ app.get("/api/products/:id", async (req, res) => {
 app.post("/api/products", async (req, res) => {
   try {
     const { name, price, mrp, image_url, sku, category } = req.body;
-    
     if (!name || !price || !mrp) {
       return res.status(400).json({ error: "Name, price, and MRP are required" });
     }
-    
     const result = await pool.query(`
       INSERT INTO products (name, price, mrp, image_url, sku, category, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       RETURNING *
     `, [name, price, mrp, image_url, sku, category]);
-    
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error("Error creating product:", err);
-    if (err.code === '23505') { // Unique constraint violation
+    if (err.code === '23505') {
       res.status(400).json({ error: "SKU already exists" });
     } else {
       res.status(500).json({ error: err.message });
     }
   }
 });
-
 /**
  * @swagger
  * /api/products/{id}:
@@ -248,37 +230,30 @@ app.put("/api/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    
     const allowedFields = ['name', 'price', 'mrp', 'image_url', 'sku', 'category'];
-    const fields = Object.keys(updates).filter(key => 
+    const fields = Object.keys(updates).filter(key =>
       allowedFields.includes(key) && updates[key] !== undefined
     );
-    
     if (fields.length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
-    
     const setClause = fields.map((field, index) => `${field} = $${index + 2}`).join(', ');
     const values = [id, ...fields.map(field => updates[field])];
-    
     const result = await pool.query(`
-      UPDATE products 
+      UPDATE products
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1 
+      WHERE id = $1
       RETURNING *
     `, values);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Product not found" });
     }
-    
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error updating product:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/products/{id}:
@@ -298,18 +273,15 @@ app.delete("/api/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query("DELETE FROM products WHERE id = $1 RETURNING *", [id]);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Product not found" });
     }
-    
     res.json({ message: "Product deleted successfully" });
   } catch (err) {
     console.error("Error deleting product:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/bills:
@@ -357,38 +329,27 @@ app.delete("/api/products/:id", async (req, res) => {
  */
 app.post("/api/bills", async (req, res) => {
   const client = await pool.connect();
-  
   try {
     await client.query('BEGIN');
-    
     const { items, total_amount, total_mrp, total_savings, created_by } = req.body;
-    
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Items array is required" });
     }
-    
-    // Create the bill
     const billResult = await client.query(`
       INSERT INTO bills (total_amount, total_mrp, total_savings, created_by, created_at)
       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
       RETURNING *
     `, [total_amount, total_mrp, total_savings, created_by]);
-    
     const billId = billResult.rows[0].id;
-    
-    // Create bill items
     for (const item of items) {
       await client.query(`
         INSERT INTO bill_items (bill_id, product_id, name, price, mrp, quantity)
         VALUES ($1, $2, $3, $4, $5, $6)
       `, [billId, item.product_id, item.name, item.price, item.mrp, item.quantity]);
     }
-    
     await client.query('COMMIT');
-    
-    // Fetch the complete bill with items
     const completeBill = await pool.query(`
-      SELECT 
+      SELECT
         b.*,
         json_agg(
           json_build_object(
@@ -405,7 +366,6 @@ app.post("/api/bills", async (req, res) => {
       WHERE b.id = $1
       GROUP BY b.id
     `, [billId]);
-    
     res.status(201).json(completeBill.rows[0]);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -415,7 +375,6 @@ app.post("/api/bills", async (req, res) => {
     client.release();
   }
 });
-
 /**
  * @swagger
  * /api/bills:
@@ -448,9 +407,8 @@ app.get("/api/bills", async (req, res) => {
   try {
     const { page, limit, offset } = getPaginationParams(req);
     const { start, end } = req.query;
-    
     let query = `
-      SELECT 
+      SELECT
         b.*,
         json_agg(
           json_build_object(
@@ -467,7 +425,6 @@ app.get("/api/bills", async (req, res) => {
     `;
     let countQuery = "SELECT COUNT(*) FROM bills";
     let queryParams = [];
-    
     if (start || end) {
       const conditions = [];
       if (start) {
@@ -480,18 +437,14 @@ app.get("/api/bills", async (req, res) => {
       }
       const whereClause = ` WHERE ${conditions.join(' AND ')}`;
       query += whereClause;
-      // countQuery should not use the alias "b."
       countQuery += whereClause.replace(/b\./g, '');
     }
-    
     query += ` GROUP BY b.id ORDER BY b.created_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
     const finalParams = [...queryParams, limit, offset];
-    
     const [bills, totalResult] = await Promise.all([
       pool.query(query, finalParams),
       pool.query(countQuery, queryParams)
     ]);
-    
     res.json({
       items: bills.rows,
       total: parseInt(totalResult.rows[0].count),
@@ -503,7 +456,6 @@ app.get("/api/bills", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/bills/{id}:
@@ -523,7 +475,7 @@ app.get("/api/bills/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(`
-      SELECT 
+      SELECT
         b.*,
         json_agg(
           json_build_object(
@@ -540,18 +492,15 @@ app.get("/api/bills/:id", async (req, res) => {
       WHERE b.id = $1
       GROUP BY b.id
     `, [id]);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Bill not found" });
     }
-    
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error fetching bill:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/sales/summary:
@@ -580,10 +529,8 @@ app.get("/api/bills/:id", async (req, res) => {
 app.get("/api/sales/summary", async (req, res) => {
   try {
     const { start, end, groupBy } = req.query;
-    
     let whereClause = "";
     let queryParams = [];
-    
     if (start || end) {
       const conditions = [];
       if (start) {
@@ -596,10 +543,8 @@ app.get("/api/sales/summary", async (req, res) => {
       }
       whereClause = ` WHERE ${conditions.join(' AND ')}`;
     }
-    
-    // Basic summary (no alias in FROM)
     const summaryResult = await pool.query(`
-      SELECT 
+      SELECT
         COUNT(*) as total_bills,
         SUM(total_amount) as total_sales,
         SUM(total_savings) as total_savings,
@@ -607,18 +552,14 @@ app.get("/api/sales/summary", async (req, res) => {
       FROM bills
       ${whereClause ? whereClause.replace(/b\./g, '') : ''}
     `, queryParams);
-    
-    // Total items sold
     const itemsResult = await pool.query(`
       SELECT SUM(bi.quantity) as total_items_sold
       FROM bills b
       JOIN bill_items bi ON b.id = bi.bill_id
       ${whereClause}
     `, queryParams);
-    
-    // Top products
     const topProductsResult = await pool.query(`
-      SELECT 
+      SELECT
         bi.name as product_name,
         SUM(bi.quantity) as total_quantity,
         SUM(bi.price * bi.quantity) as total_revenue,
@@ -630,12 +571,10 @@ app.get("/api/sales/summary", async (req, res) => {
       ORDER BY total_revenue DESC
       LIMIT 10
     `, queryParams);
-    
     const summary = summaryResult.rows[0] || {
       total_bills: 0, total_sales: 0, total_savings: 0, total_mrp: 0
     };
     summary.total_items_sold = (itemsResult.rows[0] && itemsResult.rows[0].total_items_sold) || 0;
-    
     res.json({
       ...summary,
       top_products: topProductsResult.rows
@@ -645,7 +584,6 @@ app.get("/api/sales/summary", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/users/{id}:
@@ -665,18 +603,15 @@ app.get("/api/users/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query("SELECT * FROM users WHERE id = $1", [id]);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
-    
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error fetching user:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 /**
  * @swagger
  * /api/users/{id}:
@@ -702,38 +637,30 @@ app.put("/api/users/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    
     const allowedFields = ['name', 'shop_name', 'shop_address', 'phone', 'email', 'gst', 'avatar_url', 'settings'];
-    const fields = Object.keys(updates).filter(key => 
+    const fields = Object.keys(updates).filter(key =>
       allowedFields.includes(key) && updates[key] !== undefined
     );
-    
     if (fields.length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
-    
     const setClause = fields.map((field, index) => `${field} = $${index + 2}`).join(', ');
     const values = [id, ...fields.map(field => updates[field])];
-    
     const result = await pool.query(`
-      UPDATE users 
+      UPDATE users
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1 
+      WHERE id = $1
       RETURNING *
     `, values);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
-    
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error updating user:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
-// Placeholder for image upload endpoint
 /**
  * @swagger
  * /api/uploads/image:
@@ -754,14 +681,11 @@ app.put("/api/users/:id", async (req, res) => {
  *         description: Image uploaded
  */
 app.post("/api/uploads/image", (req, res) => {
-  // This is a placeholder - you'll need to implement actual file upload
-  // using multer and cloud storage (AWS S3, Google Cloud Storage, etc.)
-  res.json({ 
+  res.json({
     message: "Image upload endpoint - implement with multer and cloud storage",
     url: "https://example.com/placeholder-image.jpg"
   });
 });
-
 /**
  * @swagger
  * /api/users/profile:
@@ -773,24 +697,17 @@ app.post("/api/uploads/image", (req, res) => {
  */
 app.get("/api/users/profile", async (req, res) => {
   try {
-    // You'll need to implement authentication middleware to get current user ID
-    // For now, using a placeholder user ID - replace with actual auth logic
-    const userId = req.user?.id || 'your-default-user-id'; 
-    
+    const userId = req.user?.id || 'your-default-user-id';
     const result = await pool.query("SELECT * FROM users WHERE id = $1", [userId]);
-    
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
-    
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error fetching user profile:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
-
 // Legacy endpoint for compatibility
 app.get("/users", async (req, res) => {
   try {
@@ -801,7 +718,6 @@ app.get("/users", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 app.listen(process.env.PORT || 3000, () => {
   const port = process.env.PORT || 3000;
   console.log(`🚀 Server running on port ${port}`);
